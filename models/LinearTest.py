@@ -1,7 +1,23 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
+from einops import rearrange # for patching
+
+class DSW_embedding(nn.Module):
+    def __init__(self, seg_len, d_model):
+        super(DSW_embedding, self).__init__()
+        self.seg_len = seg_len
+
+        self.linear = nn.Linear(seg_len, d_model)
+
+    def forward(self, x):
+        batch, ts_len, ts_dim = x.shape
+
+        x_segment = rearrange(x, 'b (seg_num seg_len) d -> (b d seg_num) seg_len', seg_len = self.seg_len)
+        x_embed = self.linear(x_segment)
+        x_embed = rearrange(x_embed, '(b d seg_num) d_model -> b d seg_num d_model', b = batch, d = ts_dim)
+        
+        return x_embed
+
 
 class moving_avg(nn.Module):
     """
@@ -49,39 +65,40 @@ class Model(nn.Module):
         self.decompsition = series_decomp(kernel_size)
         self.individual = configs.individual
         self.channels = configs.enc_in
+        self.active = nn.LeakyReLU()
 
-        if self.individual:
-            self.Linear_Seasonal = nn.ModuleList()
-            self.Linear_Trend = nn.ModuleList()
-            
-            for i in range(self.channels):
-                self.Linear_Seasonal.append(nn.Linear(self.seq_len,self.pred_len))
-                self.Linear_Trend.append(nn.Linear(self.seq_len,self.pred_len))
+        self.BN_seasonal = nn.BatchNorm1d(7)
+        self.Linear_Seasonal = nn.Linear(self.seq_len, 2*self.seq_len)
+        self.Linear_Seasonal2 = nn.Linear(2*self.seq_len, 2*self.seq_len)
+        self.Linear_Seasonal3 = nn.Linear(2*self.seq_len, self.pred_len)
+        
+        self.BN_Trend = nn.BatchNorm1d(7)
+        self.Linear_Trend = nn.Linear(self.seq_len, 2*self.seq_len)
+        self.Linear_Trend2 = nn.Linear(2*self.seq_len, 2*self.seq_len)
+        self.Linear_Trend3 = nn.Linear(2*self.seq_len, self.pred_len)
 
-                # Use this two lines if you want to visualize the weights
-                # self.Linear_Seasonal[i].weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
-                # self.Linear_Trend[i].weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
-        else:
-            self.Linear_Seasonal = nn.Linear(self.seq_len,self.pred_len)
-            self.Linear_Trend = nn.Linear(self.seq_len,self.pred_len)
-            
-            # Use this two lines if you want to visualize the weights
-            # self.Linear_Seasonal.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
-            # self.Linear_Trend.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
+        self.dropout = nn.Dropout()
+        # Use this two lines if you want to visualize the weights
+        # self.Linear_Seasonal.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
+        # self.Linear_Trend.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
 
     def forward(self, x, x_mark, y, y_mark):
         # x: [Batch, Input length, Channel]
         seasonal_init, trend_init = self.decompsition(x)
         seasonal_init, trend_init = seasonal_init.permute(0,2,1), trend_init.permute(0,2,1)
-        if self.individual:
-            seasonal_output = torch.zeros([seasonal_init.size(0),seasonal_init.size(1),self.pred_len],dtype=seasonal_init.dtype).to(seasonal_init.device)
-            trend_output = torch.zeros([trend_init.size(0),trend_init.size(1),self.pred_len],dtype=trend_init.dtype).to(trend_init.device)
-            for i in range(self.channels):
-                seasonal_output[:,i,:] = self.Linear_Seasonal[i](seasonal_init[:,i,:])
-                trend_output[:,i,:] = self.Linear_Trend[i](trend_init[:,i,:])
-        else:
-            seasonal_output = self.Linear_Seasonal(seasonal_init)
-            trend_output = self.Linear_Trend(trend_init)
+   
+        seasonal_init
+        seasonal_output_inter = self.active(self.Linear_Seasonal(seasonal_init))
+        seasonal_output = self.active(self.Linear_Seasonal2(seasonal_output_inter))
+        seasonal_output = seasonal_output + self.dropout(seasonal_output_inter)
+        seasonal_output = self.BN_seasonal(seasonal_output)
+        seasonal_output = self.Linear_Seasonal3(seasonal_output)
+
+        trend_output_inter = self.active(self.Linear_Trend(trend_init))
+        trend_output = self.active(self.Linear_Trend2(trend_output_inter))
+        trend_output = trend_output + self.dropout(trend_output_inter)
+        trend_output = self.BN_Trend(trend_output)
+        trend_output = self.Linear_Trend3(trend_output)
 
         x = seasonal_output + trend_output
         return x.permute(0,2,1) # to [Batch, Output length, Channel]
