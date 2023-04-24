@@ -1,6 +1,6 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
-from models import Informer, Autoformer, Transformer, DLinear, Linear, NLinear
+from models import Informer, Autoformer, Transformer, DLinear, Linear, NLinear, LinearTest
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
 from utils.metrics import metric
 
@@ -31,6 +31,7 @@ class Exp_Main(Exp_Basic):
             'DLinear': DLinear,
             'NLinear': NLinear,
             'Linear': Linear,
+            'Test': LinearTest,
         }
         model = model_dict[self.args.model].Model(self.args).float()
 
@@ -160,7 +161,7 @@ class Exp_Main(Exp_Basic):
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                             
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, batch_y)
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                     # print(outputs.shape,batch_y.shape)
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
